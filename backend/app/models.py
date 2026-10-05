@@ -23,6 +23,23 @@ class AdvisorRequest(BaseModel):
     question: str = Field(min_length=3, max_length=500)
 
 
+class RecommendationCreate(BaseModel):
+    well_id: str = "BW-07"
+    action: str = Field(min_length=3, max_length=300)
+    rationale: str = Field(min_length=3, max_length=500)
+    current_spm: float = Field(ge=1, le=12)
+    proposed_spm: float = Field(ge=1, le=12)
+    risk_before: float = Field(ge=0, le=1)
+    risk_after: float = Field(ge=0, le=1)
+    oil_before: float = Field(ge=0)
+    oil_after: float = Field(ge=0)
+
+
+class RecommendationDecision(BaseModel):
+    status: Literal["APPROVED", "REJECTED"]
+    note: str = Field(default="", max_length=500)
+
+
 class WellState(BaseModel):
     well_id: str
     reservoir_temperature: float

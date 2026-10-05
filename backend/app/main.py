@@ -3,23 +3,32 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from math import sin
+import os
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from .models import AdvisorRequest, ScenarioInput
+from .models import AdvisorRequest, RecommendationCreate, RecommendationDecision, ScenarioInput
 from .simulation import make_wells, optimize_css, optimize_srp
 
 
 app = FastAPI(title="ThermaTwin AI API", version="0.1.0")
+allowed_origins = [
+    "http://localhost:3000",
+    "https://thermatwinai4-0.vercel.app",
+    *[origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "").split(",") if origin.strip()],
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 wells = make_wells()
+recommendations: list[dict] = []
 
 
 def get_well(well_id: str):
@@ -126,6 +135,42 @@ def advisor(request: AdvisorRequest) -> dict:
         actions.append("continue monitoring the live trend")
     answer = f"{request.well_id} is primarily affected by " + "; ".join(reasons) + ". I recommend " + ", then ".join(actions) + f". Current modeled rod-floating risk is {state['rod_floating_risk'] * 100:.0f}% and predicted oil rate is {state['oil_rate']:.1f} BPD."
     return {"answer": answer, "evidence": state, "disclaimer": "Engineering guidance from physics-informed simulated data for prototype demonstration."}
+
+
+@app.get("/api/recommendations")
+def list_recommendations() -> list[dict]:
+    return recommendations
+
+
+@app.post("/api/recommendations", status_code=201)
+def create_recommendation(request: RecommendationCreate) -> dict:
+    get_well(request.well_id)
+    recommendation = {
+        "id": str(uuid4()),
+        **request.model_dump(),
+        "status": "PENDING",
+        "created_at": datetime.now(UTC).isoformat(),
+        "decided_at": None,
+        "decision_note": "",
+        "mode": "ADVISORY",
+    }
+    recommendations.insert(0, recommendation)
+    return recommendation
+
+
+@app.patch("/api/recommendations/{recommendation_id}")
+def decide_recommendation(recommendation_id: str, decision: RecommendationDecision) -> dict:
+    recommendation = next((item for item in recommendations if item["id"] == recommendation_id), None)
+    if recommendation is None:
+        raise HTTPException(404, "Unknown recommendation")
+    if recommendation["status"] != "PENDING":
+        raise HTTPException(409, "Recommendation has already been decided")
+    recommendation.update(
+        status=decision.status,
+        decision_note=decision.note,
+        decided_at=datetime.now(UTC).isoformat(),
+    )
+    return recommendation
 
 
 @app.websocket("/ws/live/{well_id}")

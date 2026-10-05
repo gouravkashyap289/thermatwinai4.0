@@ -12,7 +12,7 @@ Browser / Next.js  ── REST + WebSocket ── FastAPI
    └─ What-if + advisor                        └─ synthetic data / ML scripts
 ```
 
-The prototype uses deterministic physics relationships for the live experience. Optional training scripts produce four scikit-learn/XGBoost-compatible model artifacts from the synthetic dataset. SQLite is the zero-setup fallback; `DATABASE_URL` is ready for PostgreSQL/TimescaleDB integration.
+The prototype uses deterministic physics relationships for the live experience. Optional training scripts produce four scikit-learn/XGBoost-compatible model artifacts from the synthetic dataset. Runtime state and approval records are currently kept in memory; PostgreSQL/TimescaleDB persistence is planned for field deployment.
 
 ## Quick start
 
@@ -29,7 +29,7 @@ After generating the dataset, install `ml/requirements.txt` and run `python ml/t
 
 ## Demo flow
 
-Open **BW-07**, inspect its cooling reservoir and rod-float risk, open **What-If Simulator**, reduce SPM, select **Optimize Well**, then open **AI Well Advisor** to see an explanation derived from the current state.
+Open **BW-07**, inspect its cooling reservoir and rod-float risk, open **What-If Simulator**, select **Optimize Well**, and send the calculated scenario for approval. In **Action Center**, review the evidence, add an engineering note, approve or reject the recommendation, and inspect the audit trail. **AI Well Advisor** explains the same condition using the current simulated state.
 
 ## Prototype assumptions
 

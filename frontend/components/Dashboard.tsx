@@ -1,9 +1,9 @@
 "use client";
 
 import {
-  Activity, AlertTriangle, BarChart3, Bot, Box, ChevronDown, CircleGauge, Database,
+  Activity, AlertTriangle, BarChart3, Bot, Box, CheckCircle2, ChevronDown, CircleGauge, ClipboardCheck, Database,
   Download, Droplets, Factory, Gauge, LayoutDashboard, Menu, Play, Pause, RefreshCw,
-  Radio, Search, Settings, SlidersHorizontal, Sparkles, Thermometer, Waves, Wrench, X, Zap,
+  Radio, Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Thermometer, Waves, Wrench, X, XCircle, Zap,
   type LucideIcon,
 } from "lucide-react";
 import dynamic from "next/dynamic";
@@ -21,7 +21,13 @@ const WellTwin = dynamic(() => import("@/components/WellTwin"), {
 });
 
 
-type View = "Overview" | "Wells" | "Digital Twin" | "CSS Optimizer" | "SRP Optimizer" | "Predictive Maintenance" | "What-If Simulator" | "AI Well Advisor" | "Analytics" | "Reports" | "Settings";
+type View = "Overview" | "Wells" | "Digital Twin" | "CSS Optimizer" | "SRP Optimizer" | "Predictive Maintenance" | "What-If Simulator" | "AI Well Advisor" | "Action Center" | "Analytics" | "Reports" | "Settings";
+type RecommendationStatus = "PENDING" | "APPROVED" | "REJECTED";
+type Recommendation = {
+  id: string; well_id: string; action: string; rationale: string; current_spm: number; proposed_spm: number;
+  risk_before: number; risk_after: number; oil_before: number; oil_after: number; status: RecommendationStatus;
+  created_at: string; decided_at: string | null; decision_note: string; mode: "ADVISORY";
+};
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const navigation: { label: View; icon: LucideIcon }[] = [
@@ -29,6 +35,7 @@ const navigation: { label: View; icon: LucideIcon }[] = [
   { label: "Digital Twin", icon: Box }, { label: "CSS Optimizer", icon: Waves },
   { label: "SRP Optimizer", icon: CircleGauge }, { label: "Predictive Maintenance", icon: Wrench },
   { label: "What-If Simulator", icon: SlidersHorizontal }, { label: "AI Well Advisor", icon: Bot },
+  { label: "Action Center", icon: ClipboardCheck },
   { label: "Analytics", icon: BarChart3 }, { label: "Reports", icon: Download },
   { label: "Settings", icon: Settings },
 ];
@@ -105,6 +112,8 @@ export default function Dashboard() {
   const [optimized, setOptimized] = useState<Well | null>(null);
   const [question, setQuestion] = useState("Why is BW-07 production falling?");
   const [answer, setAnswer] = useState("");
+  const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
+  const [decisionNote, setDecisionNote] = useState("Approved for a supervised prototype trial.");
   const current = wells.find((well) => well.well_id === selectedId) ?? wells[0];
 
   const updateCurrent = (changes: Partial<Well>) => {
@@ -115,6 +124,9 @@ export default function Dashboard() {
   useEffect(() => {
     fetch(`${API}/api/wells`).then((response) => response.ok ? response.json() : Promise.reject()).then((data: Well[]) => {
       if (Array.isArray(data) && data.length) setWells(data);
+    }).catch(() => undefined);
+    fetch(`${API}/api/recommendations`).then((response) => response.ok ? response.json() : Promise.reject()).then((data: Recommendation[]) => {
+      if (Array.isArray(data)) setRecommendations(data);
     }).catch(() => undefined);
   }, []);
 
@@ -170,6 +182,37 @@ export default function Dashboard() {
 
   const selectWell = (id: string) => { setSelectedId(id); setOptimized(null); };
   const optimize = () => setOptimized(optimizeLocal(current));
+
+  const queueRecommendation = async () => {
+    const proposed = optimized ?? optimizeLocal(current);
+    const payload = {
+      well_id: current.well_id,
+      action: `Reduce pump speed from ${current.spm.toFixed(1)} to ${proposed.spm.toFixed(1)} SPM and monitor fillage for 30 minutes.`,
+      rationale: `The simulated scenario lowers rod-floating risk from ${pct(current.rod_floating_risk)} to ${pct(proposed.rod_floating_risk)} while maintaining ${proposed.oil_rate.toFixed(1)} BPD.`,
+      current_spm: current.spm, proposed_spm: proposed.spm, risk_before: current.rod_floating_risk,
+      risk_after: proposed.rod_floating_risk, oil_before: current.oil_rate, oil_after: proposed.oil_rate,
+    };
+    const fallback: Recommendation = { id: crypto.randomUUID(), ...payload, status: "PENDING", created_at: new Date().toISOString(), decided_at: null, decision_note: "", mode: "ADVISORY" };
+    try {
+      const response = await fetch(`${API}/api/recommendations`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if (!response.ok) throw new Error();
+      const created = await response.json() as Recommendation;
+      setRecommendations((items) => [created, ...items.filter((item) => item.id !== created.id)]);
+    } catch {
+      setRecommendations((items) => [fallback, ...items]);
+    }
+    setView("Action Center");
+  };
+
+  const decideRecommendation = async (id: string, status: Exclude<RecommendationStatus, "PENDING">) => {
+    const decided_at = new Date().toISOString();
+    setRecommendations((items) => items.map((item) => item.id === id ? { ...item, status, decision_note: decisionNote, decided_at } : item));
+    try {
+      await fetch(`${API}/api/recommendations/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status, note: decisionNote }) });
+    } catch {
+      // Keep the browser fallback usable when the deployed API is unavailable.
+    }
+  };
 
   const askAdvisor = async () => {
     try {
@@ -295,7 +338,7 @@ export default function Dashboard() {
             const value = (source as Well)[key as keyof Well] as number; return <div key={String(label)}><span>{String(label)}</span><strong>{unit === "%" ? pct(value) : fmt(value, 1)} <small>{unit === "%" ? "" : String(unit)}</small></strong></div>;
           })}
         </div>
-        {optimized && <div className="success-note"><Sparkles size={18} /><div><b>Calculated scenario ready</b><span>SPM {current.spm.toFixed(1)} → {optimized.spm.toFixed(1)} · risk {pct(current.rod_floating_risk)} → {pct(optimized.rod_floating_risk)}</span></div></div>}
+        {optimized && <><div className="success-note"><Sparkles size={18} /><div><b>Calculated scenario ready</b><span>SPM {current.spm.toFixed(1)} → {optimized.spm.toFixed(1)} · risk {pct(current.rod_floating_risk)} → {pct(optimized.rod_floating_risk)}</span></div></div><button className="primary full approval-cta" onClick={queueRecommendation}><ClipboardCheck size={16} /> Send recommendation for approval</button></>}
       </div>
     </div>
   </>;
@@ -307,11 +350,23 @@ export default function Dashboard() {
 
   const Advisor = () => <><PageTitle kicker="STATE-AWARE EXPLANATIONS" title="AI Well Advisor" text="Ask about the selected well. Every numerical statement is taken from its current simulated state." /><div className="advisor-layout"><Panel title="Ask ThermaTwin" kicker={`${selectedId} CONTEXT LOADED`}><div className="suggestions">{["Why is production falling?", "Why is rod-floating risk high?", "Should I start another CSS cycle?", "What happens if I increase SPM?"].map((item) => <button key={item} onClick={() => setQuestion(item)}>{item}</button>)}</div><textarea value={question} onChange={(event) => setQuestion(event.target.value)} /><button className="primary" onClick={askAdvisor}><Bot size={17} /> Analyze current state</button></Panel><Panel title="Engineering response" kicker="DETERMINISTIC + STATE GROUNDED"><div className="advisor-response">{answer ? <><div className="ai-mark"><Sparkles /></div><p>{answer}</p><small>Physics-informed simulated data for prototype demonstration. Validate recommendations before field use.</small></> : <div className="empty-prompt"><Bot /><p>Ask a question to generate an evidence-linked explanation.</p></div>}</div></Panel></div></>;
 
+  const ActionCenter = () => <>
+    <PageTitle kicker="HUMAN-IN-THE-LOOP CONTROL" title="Action Center" text="Review, approve or reject simulated recommendations. Approval records a decision; it never controls field equipment." />
+    <div className="advisory-banner"><ShieldCheck /><div><b>Advisory mode</b><span>No command is sent to a PLC, VFD or SCADA system. Every decision is preserved in the prototype audit trail.</span></div></div>
+    {recommendations.length === 0 ? <Panel title="No recommendations awaiting review" kicker="START THE DEMO FLOW"><div className="empty-action"><ClipboardCheck /><p>Run a scenario in the What-If Simulator, then send the calculated recommendation here for engineer approval.</p><button className="primary" onClick={() => setView("What-If Simulator")}>Open What-If Simulator</button></div></Panel> : <div className="action-layout">
+      <div className="recommendation-list">{recommendations.map((item) => <Panel key={item.id} title={`${item.well_id} operating recommendation`} kicker={`${item.mode} · ${new Date(item.created_at).toLocaleString("en-IN")}`} action={<span className={`decision-status ${item.status.toLowerCase()}`}>{item.status}</span>}>
+        <div className="recommendation-body"><h3>{item.action}</h3><p>{item.rationale}</p><div className="evidence-grid"><span>SPM<b>{item.current_spm.toFixed(1)} → {item.proposed_spm.toFixed(1)}</b></span><span>Rod-float risk<b>{pct(item.risk_before)} → {pct(item.risk_after)}</b></span><span>Oil prediction<b>{item.oil_before.toFixed(1)} → {item.oil_after.toFixed(1)} BPD</b></span></div></div>
+        {item.status === "PENDING" ? <div className="decision-controls"><label>Engineer note<input value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} /></label><div><button className="approve-button" onClick={() => decideRecommendation(item.id, "APPROVED")}><CheckCircle2 /> Approve</button><button className="reject-button" onClick={() => decideRecommendation(item.id, "REJECTED")}><XCircle /> Reject</button></div></div> : <div className="decision-record"><ShieldCheck /><div><b>{item.status === "APPROVED" ? "Approved for supervised trial" : "Recommendation rejected"}</b><span>{item.decision_note || "No decision note supplied."}</span><small>{item.decided_at ? new Date(item.decided_at).toLocaleString("en-IN") : ""}</small></div></div>}
+      </Panel>)}</div>
+      <Panel title="Audit trail" kicker={`${recommendations.length} RECORDED EVENT${recommendations.length === 1 ? "" : "S"}`} className="audit-panel"><div className="audit-list">{recommendations.flatMap((item) => [{ label: "Recommendation created", time: item.created_at, detail: `${item.well_id} · ${item.action}` }, ...(item.decided_at ? [{ label: `Recommendation ${item.status.toLowerCase()}`, time: item.decided_at, detail: item.decision_note }] : [])]).map((event, index) => <div key={`${event.time}-${index}`}><i /><span><b>{event.label}</b><small>{event.detail}</small></span><time>{new Date(event.time).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</time></div>)}</div></Panel>
+    </div>}
+  </>;
+
   const Analytics = () => <><PageTitle kicker="MULTIVARIATE TRENDS" title="Analytics" text="Thermal, production, pump and risk signals aligned on a common timeline." /><div className="analytics-grid">{[["Oil production", "oil", "#40d8d2"], ["Reservoir temperature", "temperature", "#efb84c"], ["Oil viscosity", "viscosity", "#9f86ff"], ["Pump efficiency", "efficiency", "#49c989"], ["Failure probability", "risk", "#ef6767"], ["SPM", "spm", "#60a9ff"]].map(([title, key, color]) => <Panel key={title} title={title} kicker="24 HOUR"><div className="chart"><TrendChart data={history} dataKey={key} color={color} type="line" /></div></Panel>)}</div></>;
 
   const Reports = () => <><PageTitle kicker="SHIFT-READY OUTPUT" title="Reports" text="Generate a portable well summary from the current digital-twin state." /><div className="report-card"><div className="report-preview"><span>THERMATWIN AI · WELL PERFORMANCE SUMMARY</span><h2>{selectedId}</h2><p>{new Date().toLocaleDateString("en-IN", { dateStyle: "long" })}</p><div className="report-kpis"><b>{fmt(current.oil_rate, 1)}<small>BPD oil</small></b><b>{pct(current.pump_efficiency)}<small>Pump efficiency</small></b><b>{pct(current.failure_risk)}<small>Failure risk</small></b></div><hr /><p>Current phase: <b>{current.css_phase}</b>. Reservoir temperature is <b>{fmt(current.reservoir_temperature, 1)}°C</b>, with estimated viscosity of <b>{fmt(current.oil_viscosity)} cP</b>.</p><div className="disclaimer">Physics-informed simulated data for prototype demonstration.</div></div><div className="report-actions"><h3>Export report</h3><p>Includes well state, production, CSS, SRP, risk scores and the latest advisor recommendation.</p><button className="primary" onClick={() => exportReport("json")}><Download size={16} /> Download JSON</button><button className="secondary" onClick={() => exportReport("csv")}><Download size={16} /> Download CSV</button></div></div></>;
 
-  const SettingsView = () => <><PageTitle kicker="PROTOTYPE CONFIGURATION" title="Settings" text="Runtime and engineering assumptions for this demonstration." /><div className="details-grid"><DataGroup title="Data source" icon={Database} values={[["Mode", connected ? "FastAPI WebSocket" : "Browser simulation fallback"], ["Update interval", "2 seconds"], ["Wells", "20 synthetic"], ["History", "365 days · 6-hour intervals"]]} /><DataGroup title="Engineering model" icon={Settings} values={[["Viscosity", "Exponential temperature curve"], ["Optimization", "Feasible grid search"], ["Persistence", "SQLite fallback"], ["Field calibration", "Not applied"]]} /></div></>;
+  const SettingsView = () => <><PageTitle kicker="PROTOTYPE CONFIGURATION" title="Settings" text="Runtime and engineering assumptions for this demonstration." /><div className="details-grid"><DataGroup title="Data source" icon={Database} values={[["Mode", connected ? "FastAPI WebSocket" : "Browser simulation fallback"], ["Update interval", "2 seconds"], ["Wells", "20 synthetic"], ["History", "365 days · 6-hour intervals"]]} /><DataGroup title="Engineering model" icon={Settings} values={[["Viscosity", "Exponential temperature curve"], ["Optimization", "Feasible grid search"], ["Persistence", "In-memory prototype"], ["Field calibration", "Not applied"]]} /></div><Panel title="Capability status" kicker="HONEST PROTOTYPE SCOPE"><div className="capability-grid"><div><b>Implemented</b><span>Dashboard, 3D twin, simulation, alarms, optimization, advisor, approval workflow and reports</span></div><div><b>Simulated</b><span>Telemetry, CSS response, SRP behavior, production forecasts and risk scores</span></div><div><b>Planned</b><span>ONGC SCADA connection, field calibration, persistent database and supervised pilot deployment</span></div></div></Panel></>;
 
   const renderView = () => {
     if (view === "Overview") return Overview();
@@ -322,6 +377,7 @@ export default function Dashboard() {
     if (view === "Predictive Maintenance") return Maintenance();
     if (view === "What-If Simulator") return WhatIf();
     if (view === "AI Well Advisor") return Advisor();
+    if (view === "Action Center") return ActionCenter();
     if (view === "Analytics") return Analytics();
     if (view === "Reports") return Reports();
     return SettingsView();
